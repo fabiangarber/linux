@@ -44,7 +44,7 @@ void *poll_thread(void *arg)
     pfd.events = POLLIN;
     
     while (gpio_change_count < max_changes) {
-        ret = poll(&pfd, 1, -1);  // block indefinitely until an event
+        ret = poll(&pfd, 1, -1);  // Block indefinitely until an event occurs.
         if (ret < 0) {
             perror("Error polling device");
             break;
@@ -109,7 +109,8 @@ void *sim_thread(void *arg)
 int main(int argc, char *argv[])
 {
     pthread_t thread_poll, thread_sim;
-    time_t start_time, end_time;
+    time_t start_time_print, end_time_print;
+    struct timespec start_hr, end_hr;
     double elapsed;
 
     // Parse command-line arguments.
@@ -134,9 +135,16 @@ int main(int argc, char *argv[])
         return 1;
     }
     
-    // Record the start timestamp.
-    time(&start_time);
-    printf("Start time: %s", ctime(&start_time));
+    // Record the start timestamp using time() for printing.
+    time(&start_time_print);
+    printf("Start time: %s", ctime(&start_time_print));
+    
+    // Also record the start time using a high-resolution clock.
+    if (clock_gettime(CLOCK_MONOTONIC, &start_hr) != 0) {
+        perror("Error getting high-resolution start time");
+        close(fd);
+        return 1;
+    }
 
     if (debugMode) {
         printf("Starting GPIO poll and simulation threads in DEBUG mode...\n");
@@ -158,14 +166,22 @@ int main(int argc, char *argv[])
     pthread_join(thread_poll, NULL);
     pthread_join(thread_sim, NULL);
     
-    // Record the end timestamp.
-    time(&end_time);
-    printf("End time: %s", ctime(&end_time));
-
-    // Compute and print the elapsed time in seconds.
-    elapsed = difftime(end_time, start_time);
+    // Record the end timestamp using time() for printing.
+    time(&end_time_print);
+    printf("End time: %s", ctime(&end_time_print));
+    
+    // Also record the end time using a high-resolution clock.
+    if (clock_gettime(CLOCK_MONOTONIC, &end_hr) != 0) {
+        perror("Error getting high-resolution end time");
+        close(fd);
+        return 1;
+    }
+    
+    // Compute and print the elapsed time with high precision.
+    elapsed = (end_hr.tv_sec - start_hr.tv_sec) + 
+              (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
     printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
-    printf("Total elapsed time: %.2f seconds.\n", elapsed);
+    printf("Total elapsed time: %.9f seconds.\n", elapsed);
     
     close(fd);
     return 0;
