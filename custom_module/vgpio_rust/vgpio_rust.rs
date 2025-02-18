@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A simple Rust character device using the C API.
+#![allow(missing_docs)]
 
 use kernel::prelude::*;
 use kernel::bindings;
@@ -12,13 +13,13 @@ use core::marker::PhantomData;
 module! {
     type: VgpioRust,
     name: "vgpio_rust",
-    author: "Fabian T. Garber",
-    description: "A simple Rust character device using the C API",
+    author: "Fabian T Garber",
+    description: "A simple Rust character device",
     license: "GPL",
 }
 
 const DEVICE_NAME: &CStr = c_str!("vgpio_rust");
-const CLASS_NAME: &CStr = c_str!("vgpio_rust_class");
+const CLASS_NAME: &CStr = c_str!("vgpio");
 
 /// A newtype wrapper around the C file_operations structure.
 /// We assert that it is safe to share (Sync) because it is only used as a static
@@ -153,13 +154,23 @@ pub extern "C" fn vgpio_read(
     _file: *mut kernel::bindings::file,
     buf: *mut u8,
     count: usize,
-    _pos: *mut kernel::bindings::loff_t,
+    pos: *mut kernel::bindings::loff_t,
 ) -> isize {
-    pr_info!("vgpio_rust: read called with count={}\n", count);
 
-    let msg = b"Hello from vgpio_rust!\n";
+    let msg = b"Hello from vgpio_rust!\n second line\n";
     let len = msg.len();
-    let to_copy = count.min(len);
+
+    // Get the current file offset.
+    let offset = unsafe { *pos as usize };
+
+    // If offset is greater than or equal to the length, we're at EOF.
+    if offset >= len {
+        return 0;
+    }
+
+    // Determine how many bytes we can copy.
+    let bytes_left = len - offset;
+    let to_copy = count.min(bytes_left);
 
     if buf.is_null() {
         pr_err!("vgpio_rust: error: buf is null!\n");
@@ -169,7 +180,7 @@ pub extern "C" fn vgpio_read(
     let res = unsafe {
         bindings::copy_to_user(
             buf as *mut core::ffi::c_void,
-            msg.as_ptr() as *const core::ffi::c_void,
+            msg[offset..offset + to_copy].as_ptr() as *const core::ffi::c_void,
             to_copy as u64,
         )
     };
@@ -179,7 +190,10 @@ pub extern "C" fn vgpio_read(
         return -(kernel::bindings::EFAULT as isize);
     }
 
-    pr_info!("vgpio_rust: successfully copied {} bytes\n", to_copy);
+    // Update the file offset.
+    unsafe {
+        *pos += to_copy as i64;
+    }
+
     to_copy as isize
 }
-

@@ -12,8 +12,8 @@ use core::marker::PhantomData;
 module! {
     type: VgpioRust,
     name: "vgpio_rust",
-    author: "Fabian T. Garber",
-    description: "A simple Rust character device using the C API",
+    author: "Fabian T Garber",
+    description: "A simple Rust character device",
     license: "GPL",
 }
 
@@ -148,6 +148,7 @@ pub extern "C" fn vgpio_release(
     0
 }
 
+/* old read function
 #[no_mangle]
 pub extern "C" fn vgpio_read(
     _file: *mut kernel::bindings::file,
@@ -182,4 +183,54 @@ pub extern "C" fn vgpio_read(
     pr_info!("vgpio_rust: successfully copied {} bytes\n", to_copy);
     to_copy as isize
 }
+*/
+#[no_mangle]
+pub extern "C" fn vgpio_read(
+    _file: *mut kernel::bindings::file,
+    buf: *mut u8,
+    count: usize,
+    pos: *mut kernel::bindings::loff_t,
+) -> isize {
+    pr_info!("vgpio_rust: read called with count={}\n", count);
 
+    let msg = b"Hello from vgpio_rust!\n";
+    let len = msg.len();
+
+    // Get the current file offset.
+    let offset = unsafe { *pos as usize };
+
+    // If offset is greater than or equal to the length, we're at EOF.
+    if offset >= len {
+        return 0;
+    }
+
+    // Determine how many bytes we can copy.
+    let bytes_left = len - offset;
+    let to_copy = count.min(bytes_left);
+
+    if buf.is_null() {
+        pr_err!("vgpio_rust: error: buf is null!\n");
+        return -(kernel::bindings::EFAULT as isize);
+    }
+
+    let res = unsafe {
+        bindings::copy_to_user(
+            buf as *mut core::ffi::c_void,
+            msg[offset..offset + to_copy].as_ptr() as *const core::ffi::c_void,
+            to_copy as u64,
+        )
+    };
+
+    if res != 0 {
+        pr_err!("vgpio_rust: error: copy_to_user() failed with {}\n", res);
+        return -(kernel::bindings::EFAULT as isize);
+    }
+
+    // Update the file offset.
+    unsafe {
+        *pos += to_copy as i64;
+    }
+
+    pr_info!("vgpio_rust: successfully copied {} bytes\n", to_copy);
+    to_copy as isize
+}
