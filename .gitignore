@@ -11,7 +11,11 @@
 # Normal rules (sorted alphabetically)
 #
 .*
+*.sh
 *.a
+mnt
+*.lock
+*.temp
 *.asn1.[ch]
 *.bin
 *.bz2
