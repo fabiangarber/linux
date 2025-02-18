@@ -1,7 +1,10 @@
 KDIR := /home/kserver/sources/raspberry_pi/kernel_rpi/linux/
 CROSS_COMPILE := aarch64-linux-gnu-
+RUSTFLAGS := -C target-feature=+neon -C target-cpu=cortex-a72
 
-rust_sample-y := vgpio_rust.rs
+export RUSTFLAGS
+
+rust_sample-y := src/vgpio_rust.rs
 obj-m += vgpio_rust.o
 
 all:

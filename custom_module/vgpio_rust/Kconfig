@@ -1,0 +1,5 @@
+config VGPIO_RUST
+    tristate "Rust VGPIO Character Device"
+    depends on RUST
+    help
+      A simple Rust character device driver under the vgpio class.

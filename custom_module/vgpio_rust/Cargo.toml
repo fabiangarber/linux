@@ -1,0 +1,12 @@
+[package]
+name = "vgpio_rust"
+version = "0.1.0"
+authors = ["Fabian T. Garber"]
+edition = "2021"
+
+[dependencies]
+kernel = { path = "/home/kserver/sources/raspberry_pi/kernel_rpi/linux/rust" }
+
+[build]
+rustflags = ["-C", "target-feature=+neon"]
+
