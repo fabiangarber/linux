@@ -1,38 +1,61 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A simple Rust character device using the C API.
+//! This module creates a virtual GPIO pin that can be set to 0 or 1 via ioctl commands.
+
 #![allow(missing_docs)]
 
 use kernel::prelude::*;
 use kernel::bindings;
 use kernel::c_str;
 use kernel::error::code;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_long};
 use core::marker::PhantomData;
 
 module! {
     type: VgpioRust,
     name: "vgpio_rust",
     author: "Fabian T Garber",
-    description: "A simple Rust character device",
+    description: "A simple Rust character device with a virtual GPIO pin",
     license: "GPL",
 }
 
+/// Name of the device node.
 const DEVICE_NAME: &CStr = c_str!("vgpio_rust");
+/// Name of the class for udev.
 const CLASS_NAME: &CStr = c_str!("vgpio");
 
+/// IOCTL command constants.
+/// These values must match the ones used in userspace.
+const GPIO_SET_VALUE: u32 = 0x40086701;
+const GPIO_GET_VALUE: u32 = 0x80086702;
+
+/// Structure for GPIO data passed through ioctl.
+/// This structure is C-compatible.
+#[repr(C)]
+struct GpioData {
+    pin: c_int,
+    value: c_int,
+}
+
+/// Global virtual GPIO pin state (only pin 0 is supported).
+/// A value of 0 means low; 1 means high.
+static mut VGPIO_PIN: c_int = 0;
+
+use kernel::sync::SpinLock;
+use kernel::static_lock_class; // Macro to obtain a lock class key
+
 /// A newtype wrapper around the C file_operations structure.
-/// We assert that it is safe to share (Sync) because it is only used as a static
-/// read-only table of function pointers.
 #[repr(transparent)]
 struct VgpioFops(kernel::bindings::file_operations);
 unsafe impl Sync for VgpioFops {}
 
 static VGPIO_FOPS: VgpioFops = VgpioFops(kernel::bindings::file_operations {
-    owner: core::ptr::null_mut(), // Consider setting THIS_MODULE if needed
+    owner: core::ptr::null_mut(), // Optionally set THIS_MODULE if needed.
     open: Some(vgpio_open),
     release: Some(vgpio_release),
     read: Some(vgpio_read as unsafe extern "C" fn(_, _, _, _) -> _),
+    unlocked_ioctl: Some(vgpio_ioctl), // Our ioctl handler.
     write: None,
     llseek: None,
     poll: None,
@@ -57,14 +80,13 @@ impl kernel::Module for VgpioRust {
 
         let major = unsafe {
             bindings::__register_chrdev(
-                0, // Dynamically allocate major number
-                0, // baseminor
-                1, // count
+                0, // Allocate a major number dynamically.
+                0, // Base minor.
+                1, // Count.
                 DEVICE_NAME.as_char_ptr(),
-                &VGPIO_FOPS.0, // Pass the inner file_operations pointer
+                &VGPIO_FOPS.0, // File operations.
             )
         };
-
         if major < 0 {
             pr_err!("vgpio_rust: failed to register device: {}\n", major);
             return Err(code::EINVAL.into());
@@ -79,11 +101,8 @@ impl kernel::Module for VgpioRust {
             return Err(code::EINVAL.into());
         }
 
-        // Compute dev_t using the proper shift.
-        // Typically, dev_t is computed with MKDEV(major, minor),
-        // where the major number is shifted by MINORBITS (usually 20 on modern systems).
+        // Compute dev_t (major shifted left by 20 bits).
         let dev = ((major as u32) << 20) | 0;
-
         let device = unsafe {
             bindings::device_create(
                 class,
@@ -93,7 +112,6 @@ impl kernel::Module for VgpioRust {
                 DEVICE_NAME.as_char_ptr(),
             )
         };
-
         if device.is_null() {
             pr_err!("vgpio_rust: failed to create device\n");
             unsafe {
@@ -116,7 +134,6 @@ impl kernel::Module for VgpioRust {
 
 impl Drop for VgpioRust {
     fn drop(&mut self) {
-        // Compute dev_t the same way here
         let dev = ((self.major as u32) << 20) | 0;
         unsafe {
             if !self.device.is_null() {
@@ -133,8 +150,8 @@ impl Drop for VgpioRust {
 
 #[no_mangle]
 pub extern "C" fn vgpio_open(
-    _inode: *mut kernel::bindings::inode,
-    _file: *mut kernel::bindings::file,
+    _inode: *mut bindings::inode,
+    _file: *mut bindings::file,
 ) -> c_int {
     pr_info!("vgpio_rust: device opened.\n");
     0
@@ -142,8 +159,8 @@ pub extern "C" fn vgpio_open(
 
 #[no_mangle]
 pub extern "C" fn vgpio_release(
-    _inode: *mut kernel::bindings::inode,
-    _file: *mut kernel::bindings::file,
+    _inode: *mut bindings::inode,
+    _file: *mut bindings::file,
 ) -> c_int {
     pr_info!("vgpio_rust: device released.\n");
     0
@@ -151,11 +168,12 @@ pub extern "C" fn vgpio_release(
 
 #[no_mangle]
 pub extern "C" fn vgpio_read(
-    _file: *mut kernel::bindings::file,
+    _file: *mut bindings::file,
     buf: *mut u8,
     count: usize,
-    pos: *mut kernel::bindings::loff_t,
+    pos: *mut bindings::loff_t,
 ) -> isize {
+    pr_info!("vgpio_rust: read called with count={}\n", count);
 
     let msg = b"Hello from vgpio_rust!\n second line\n";
     let len = msg.len();
@@ -163,18 +181,18 @@ pub extern "C" fn vgpio_read(
     // Get the current file offset.
     let offset = unsafe { *pos as usize };
 
-    // If offset is greater than or equal to the length, we're at EOF.
+    // If offset is >= message length, signal EOF.
     if offset >= len {
         return 0;
     }
 
-    // Determine how many bytes we can copy.
+    // Calculate number of bytes to copy.
     let bytes_left = len - offset;
     let to_copy = count.min(bytes_left);
 
     if buf.is_null() {
         pr_err!("vgpio_rust: error: buf is null!\n");
-        return -(kernel::bindings::EFAULT as isize);
+        return -(bindings::EFAULT as isize);
     }
 
     let res = unsafe {
@@ -187,13 +205,81 @@ pub extern "C" fn vgpio_read(
 
     if res != 0 {
         pr_err!("vgpio_rust: error: copy_to_user() failed with {}\n", res);
-        return -(kernel::bindings::EFAULT as isize);
+        return -(bindings::EFAULT as isize);
     }
 
-    // Update the file offset.
+    // Update file offset.
     unsafe {
         *pos += to_copy as i64;
     }
 
     to_copy as isize
+}
+
+/// IOCTL handler for the virtual GPIO pin.
+/// This example supports two commands:
+/// - GPIO_SET_VALUE: sets the value of virtual GPIO pin 0
+/// - GPIO_GET_VALUE: gets the current value of virtual GPIO pin 0
+#[no_mangle]
+pub extern "C" fn vgpio_ioctl(
+    _file: *mut bindings::file,
+    cmd: u32,
+    arg: u64,  // Third parameter type must be u64
+) -> c_long {
+    // Prepare a GpioData structure.
+    let mut data: GpioData = unsafe { core::mem::zeroed() };
+
+    match cmd {
+        GPIO_SET_VALUE => {
+            let ret = unsafe {
+                bindings::copy_from_user(
+                    &mut data as *mut GpioData as *mut core::ffi::c_void,
+                    arg as *const core::ffi::c_void,
+                    core::mem::size_of::<GpioData>() as u64,
+                )
+            };
+            if ret != 0 {
+                return -(bindings::EFAULT as c_long);
+            }
+            // Only support pin 0.
+            if data.pin != 0 {
+                return -(bindings::EINVAL as c_long);
+            }
+            unsafe {
+                VGPIO_PIN = data.value;
+            }
+            pr_info!("vgpio_rust: virtual GPIO pin set to {}\n", data.value);
+        },
+        GPIO_GET_VALUE => {
+            let ret = unsafe {
+                bindings::copy_from_user(
+                    &mut data as *mut GpioData as *mut core::ffi::c_void,
+                    arg as *const core::ffi::c_void,
+                    core::mem::size_of::<GpioData>() as u64,
+                )
+            };
+            if ret != 0 {
+                return -(bindings::EFAULT as c_long);
+            }
+            // Only support pin 0.
+            if data.pin != 0 {
+                return -(bindings::EINVAL as c_long);
+            }
+            unsafe {
+                data.value = VGPIO_PIN;
+            }
+            let ret = unsafe {
+                bindings::copy_to_user(
+                    arg as *mut core::ffi::c_void,
+                    &data as *const GpioData as *const core::ffi::c_void,
+                    core::mem::size_of::<GpioData>() as u64,
+                )
+            };
+            if ret != 0 {
+                return -(bindings::EFAULT as c_long);
+            }
+        },
+        _ => return -(bindings::EINVAL as c_long),
+    }
+    0
 }
