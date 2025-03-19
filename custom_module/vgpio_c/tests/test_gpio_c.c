@@ -61,27 +61,17 @@ void *sim_thread(void *arg)
     return NULL;
 }
 
-int main(int argc, char *argv[])
+void run_test()
 {
     pthread_t thread_irq, thread_sim;
 
-    // Parse command-line arguments.
-    for (int i = 1; i < argc; i++) {
-        if (isdigit(argv[i][0])) {
-            int val = atoi(argv[i]);
-            if (val > 0)
-                max_changes = val;
-        } else if ((strcmp(argv[i], "-d") == 0) || (strcmp(argv[i], "--debug") == 0)) {
-            debugMode = 1;
-        }
-    }
-
-    srand(time(NULL));
+    // Reset the change count for each test run
+    gpio_change_count = 0;
 
     fd = open(DEVICE_FILE, O_RDWR);
     if (fd < 0) {
         perror("Error opening device file");
-        return 1;
+        return;
     }
 
     // Store start time for printing
@@ -106,12 +96,44 @@ int main(int argc, char *argv[])
 
     // Stop high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &end_hr);
-    double elapsed = (end_hr.tv_sec - start_hr.tv_sec) + 
+    double elapsed = (end_hr.tv_sec - start_hr.tv_sec) +
                      (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
 
     printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
     printf("Total elapsed time: %.9f seconds.\n", elapsed);
 
     close(fd);
+}
+
+int main(int argc, char *argv[])
+{
+    int repetitions = 1;
+
+    // Parse command-line arguments.
+    for (int i = 1; i < argc; i++) {
+        if (isdigit(argv[i][0])) {
+            int val = atoi(argv[i]);
+            if (val > 0)
+                max_changes = val;
+        } else if ((strcmp(argv[i], "-d") == 0) || (strcmp(argv[i], "--debug") == 0)) {
+            debugMode = 1;
+        } else if ((strcmp(argv[i], "-r") == 0) || (strcmp(argv[i], "--repetitions") == 0)) {
+            if (i + 1 < argc && isdigit(argv[i + 1][0])) {
+                repetitions = atoi(argv[++i]);
+            } else {
+                fprintf(stderr, "Error: Missing argument for --repetitions\n");
+                return 1;
+            }
+        }
+    }
+
+    for (int i = 0; i < repetitions; i++) {
+        run_test();
+        if (i < repetitions - 1) {
+            printf("Pausing for 1 minute before next run...\n");
+            sleep(60);
+        }
+    }
+
     return 0;
 }
