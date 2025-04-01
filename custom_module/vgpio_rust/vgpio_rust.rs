@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A simple Rust character device using the C API.
-//! This module creates a virtual GPIO pin that can be set to 0 or 1 via ioctl commands.
+//! This module creates a virtual GPIO with 8 pins that can be set to 0 or 1 via ioctl commands.
 
 #![allow(missing_docs)]
 
@@ -16,7 +16,7 @@ module! {
     type: VgpioRust,
     name: "vgpio_rust",
     author: "Fabian T Garber",
-    description: "A simple Rust character device with a virtual GPIO pin",
+    description: "A virtual Rust GPIO module with 8 pins",
     license: "GPL",
 }
 
@@ -38,12 +38,9 @@ struct GpioData {
     value: c_int,
 }
 
-/// Global virtual GPIO pin state (only pin 0 is supported).
+/// Global virtual GPIO pin states (8 pins supported).
 /// A value of 0 means low; 1 means high.
-static mut VGPIO_PIN: c_int = 0;
-
-use kernel::sync::SpinLock;
-use kernel::static_lock_class; // Macro to obtain a lock class key
+static mut VGPIO_PINS: [c_int; 8] = [0; 8];
 
 /// A newtype wrapper around the C file_operations structure.
 #[repr(transparent)]
@@ -216,10 +213,10 @@ pub extern "C" fn vgpio_read(
     to_copy as isize
 }
 
-/// IOCTL handler for the virtual GPIO pin.
+/// IOCTL handler for the virtual GPIO pins.
 /// This example supports two commands:
-/// - GPIO_SET_VALUE: sets the value of virtual GPIO pin 0
-/// - GPIO_GET_VALUE: gets the current value of virtual GPIO pin 0
+/// - GPIO_SET_VALUE: sets the value of a specified virtual GPIO pin
+/// - GPIO_GET_VALUE: gets the current value of a specified virtual GPIO pin
 #[no_mangle]
 pub extern "C" fn vgpio_ioctl(
     _file: *mut bindings::file,
@@ -241,14 +238,14 @@ pub extern "C" fn vgpio_ioctl(
             if ret != 0 {
                 return -(bindings::EFAULT as c_long);
             }
-            // Only support pin 0.
-            if data.pin != 0 {
+            // Only support pins 0-7.
+            if data.pin < 0 || data.pin >= 8 {
                 return -(bindings::EINVAL as c_long);
             }
             unsafe {
-                VGPIO_PIN = data.value;
+                VGPIO_PINS[data.pin as usize] = data.value;
             }
-            pr_info!("vgpio_rust: virtual GPIO pin set to {}\n", data.value);
+            pr_info!("vgpio_rust: virtual GPIO pin {} set to {}\n", data.pin, data.value);
         },
         GPIO_GET_VALUE => {
             let ret = unsafe {
@@ -261,12 +258,12 @@ pub extern "C" fn vgpio_ioctl(
             if ret != 0 {
                 return -(bindings::EFAULT as c_long);
             }
-            // Only support pin 0.
-            if data.pin != 0 {
+            // Only support pins 0-7.
+            if data.pin < 0 || data.pin >= 8 {
                 return -(bindings::EINVAL as c_long);
             }
             unsafe {
-                data.value = VGPIO_PIN;
+                data.value = VGPIO_PINS[data.pin as usize];
             }
             let ret = unsafe {
                 bindings::copy_to_user(
@@ -283,3 +280,4 @@ pub extern "C" fn vgpio_ioctl(
     }
     0
 }
+
