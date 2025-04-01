@@ -16,7 +16,7 @@ struct gpio_data {
 };
 
 #define GPIO_SET_VALUE 0x40086701
-#define GPIO_GET_VALUE 0x8008670
+#define GPIO_GET_VALUE 0x80086702
 
 #define DEVICE_FILE "/dev/vgpio_c"
 volatile int gpio_change_count = 0;
