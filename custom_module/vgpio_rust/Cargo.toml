@@ -8,5 +8,4 @@ edition = "2021"
 kernel = { path = "/home/kserver/sources/raspberry_pi/kernel_rpi/linux/rust" }
 
 [build]
-rustflags = ["-C", "target-feature=+neon"]
-
+rustflags = ["-C", "target-feature=+neon", "-C", "target-cpu=cortex-a72"]
