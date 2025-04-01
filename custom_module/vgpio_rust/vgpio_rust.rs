@@ -172,7 +172,7 @@ pub extern "C" fn vgpio_read(
 ) -> isize {
     pr_info!("vgpio_rust: read called with count={}\n", count);
 
-    let msg = b"Hello from vgpio_rust!\n second line\n";
+    let msg = b"Hello from vgpio_rust!";
     let len = msg.len();
 
     // Get the current file offset.
@@ -245,7 +245,7 @@ pub extern "C" fn vgpio_ioctl(
             unsafe {
                 VGPIO_PINS[data.pin as usize] = data.value;
             }
-            pr_info!("vgpio_rust: virtual GPIO pin {} set to {}\n", data.pin, data.value);
+//            pr_info!("vgpio_rust: virtual GPIO pin {} set to {}\n", data.pin, data.value);
         },
         GPIO_GET_VALUE => {
             let ret = unsafe {
