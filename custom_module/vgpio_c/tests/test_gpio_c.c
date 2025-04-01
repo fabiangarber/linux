@@ -61,7 +61,7 @@ void *sim_thread(void *arg)
     return NULL;
 }
 
-void run_test()
+void run_test(int current_rep, int total_reps)
 {
     pthread_t thread_irq, thread_sim;
 
@@ -73,6 +73,10 @@ void run_test()
         perror("Error opening device file");
         return;
     }
+
+    // Print the repetition count
+    printf("Starting test %d out of %d\n", current_rep, total_reps);
+    printf("\n");
 
     // Store start time for printing
     time(&start_time_print);
@@ -128,10 +132,12 @@ int main(int argc, char *argv[])
     }
 
     for (int i = 0; i < repetitions; i++) {
-        run_test();
+        run_test(i + 1, repetitions);
         if (i < repetitions - 1) {
-            printf("Pausing for 1 minute before next run...\n");
-            sleep(60);
+            printf("Pausing for 30 seconds before next run...\n");
+            printf("\n");
+            printf("\n");
+            sleep(30);
         }
     }
 
