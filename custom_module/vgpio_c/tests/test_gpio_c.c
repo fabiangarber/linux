@@ -15,8 +15,8 @@ struct gpio_data {
     int value;
 };
 
-#define GPIO_SET_VALUE _IOW(GPIO_MAGIC, 1, struct gpio_data)
-#define GPIO_GET_VALUE _IOR(GPIO_MAGIC, 2, struct gpio_data)
+#define GPIO_SET_VALUE 0x40086701
+#define GPIO_GET_VALUE 0x8008670
 
 #define DEVICE_FILE "/dev/vgpio_c"
 volatile int gpio_change_count = 0;
@@ -75,6 +75,7 @@ void run_test(int current_rep, int total_reps)
     }
 
     // Print the repetition count
+    printf("This is a test for the C kernel module");
     printf("Starting test %d out of %d\n", current_rep, total_reps);
     printf("\n");
 
