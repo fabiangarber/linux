@@ -75,7 +75,7 @@ void run_test(int current_rep, int total_reps)
     }
 
     // Print the repetition count
-    printf("This is a test for the C kernel module");
+    printf("This is a test for the C kernel module\n");
     printf("Starting test %d out of %d\n", current_rep, total_reps);
     printf("\n");
 
