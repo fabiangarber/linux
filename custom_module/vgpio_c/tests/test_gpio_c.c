@@ -1,146 +1,103 @@
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <time.h>
-#include <ctype.h>
-
-#define GPIO_MAGIC 'g'
-
-struct gpio_data {
-    int pin;
-    int value;
-};
-
-#define GPIO_SET_VALUE 0x40086701
-#define GPIO_GET_VALUE 0x80086702
-
-#define DEVICE_FILE "/dev/vgpio_c"
-volatile int gpio_change_count = 0;
-int max_changes = 7;
-int debugMode = 0;
-int fd;
-struct timespec start_hr, end_hr;
-time_t start_time_print, end_time_print;
-
-// Wait for Virtual Event in a separate thread
-void *irq_wait_thread(void *arg)
-{
-    char buf;
-    while (gpio_change_count < max_changes) {
-        if (read(fd, &buf, 1) < 0) {
-            perror("Error waiting for event");
-            break;
-        }
-        gpio_change_count++;
-        if (debugMode)
-            printf("Virtual GPIO Event Triggered! Change #%d\n", gpio_change_count);
-    }
-    return NULL;
-}
-
-// Simulate GPIO changes
-void *sim_thread(void *arg)
-{
-    struct gpio_data data;
-    srand(time(NULL));
-
-    while (gpio_change_count < max_changes) {
-        //usleep(1000);
-        data.pin = rand() % 8;
-        data.value = rand() % 2;
-        if (ioctl(fd, GPIO_SET_VALUE, &data) < 0) {
-            perror("Error setting GPIO value");
-        } else if (debugMode) {
-            printf("Simulated GPIO change: pin %d set to %d\n", data.pin, data.value);
-        }
-    }
-    return NULL;
-}
-
-void run_test(int current_rep, int total_reps)
-{
-    pthread_t thread_irq, thread_sim;
-
-    // Reset the change count for each test run
-    gpio_change_count = 0;
-
-    fd = open(DEVICE_FILE, O_RDWR);
-    if (fd < 0) {
-        perror("Error opening device file");
-        return;
-    }
-
-    // Print the repetition count
-    printf("This is a test for the C kernel module\n");
-    printf("Starting test %d out of %d\n", current_rep, total_reps);
-    printf("\n");
-
-    // Store start time for printing
-    time(&start_time_print);
-    printf("Start time: %s", ctime(&start_time_print));
-
-    // Start high-resolution timer
-    clock_gettime(CLOCK_MONOTONIC, &start_hr);
-
-    if (debugMode)
-        printf("Starting GPIO IRQ wait and simulation threads in DEBUG mode...\n");
-
-    pthread_create(&thread_irq, NULL, irq_wait_thread, NULL);
-    pthread_create(&thread_sim, NULL, sim_thread, NULL);
-
-    pthread_join(thread_irq, NULL);
-    pthread_join(thread_sim, NULL);
-
-    // Store end time for printing
-    time(&end_time_print);
-    printf("End time: %s", ctime(&end_time_print));
-
-    // Stop high-resolution timer
-    clock_gettime(CLOCK_MONOTONIC, &end_hr);
-    double elapsed = (end_hr.tv_sec - start_hr.tv_sec) +
-                     (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
-
-    printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
-    printf("Total elapsed time: %.9f seconds.\n", elapsed);
-
-    close(fd);
-}
-
-int main(int argc, char *argv[])
-{
-    int repetitions = 1;
-
-    // Parse command-line arguments.
-    for (int i = 1; i < argc; i++) {
-        if (isdigit(argv[i][0])) {
-            int val = atoi(argv[i]);
-            if (val > 0)
-                max_changes = val;
-        } else if ((strcmp(argv[i], "-d") == 0) || (strcmp(argv[i], "--debug") == 0)) {
-            debugMode = 1;
-        } else if ((strcmp(argv[i], "-r") == 0) || (strcmp(argv[i], "--repetitions") == 0)) {
-            if (i + 1 < argc && isdigit(argv[i + 1][0])) {
-                repetitions = atoi(argv[++i]);
-            } else {
-                fprintf(stderr, "Error: Missing argument for --repetitions\n");
-                return 1;
-            }
-        }
-    }
-
-    for (int i = 0; i < repetitions; i++) {
-        run_test(i + 1, repetitions);
-        if (i < repetitions - 1) {
-            printf("Pausing for 30 seconds before next run...\n");
-            printf("\n");
-            printf("\n");
-            sleep(30);
-        }
-    }
-
-    return 0;
+/*  userspace_ioctl.c - the process to use ioctl's to control the kernel module 
+ * 
+ *  Until now we could have used cat for input and output.  But now 
+ *  we need to do ioctl's, which require writing our own process.  
+ */ 
+ 
+/* device specifics, such as ioctl numbers and the  
+ * major device file. */ 
+#include "../chardev.h" 
+ 
+#include <stdio.h> /* standard I/O */ 
+#include <fcntl.h> /* open */ 
+#include <unistd.h> /* close */ 
+#include <stdlib.h> /* exit */ 
+#include <sys/ioctl.h> /* ioctl */ 
+ 
+/* Functions for the ioctl calls */ 
+ 
+int ioctl_set_msg(int file_desc, char *message) 
+{ 
+    int ret_val; 
+ 
+    ret_val = ioctl(file_desc, IOCTL_SET_MSG, message); 
+ 
+    if (ret_val < 0) { 
+        printf("ioctl_set_msg failed:%d\n", ret_val); 
+    } 
+ 
+    return ret_val; 
+} 
+ 
+int ioctl_get_msg(int file_desc) 
+{ 
+    int ret_val; 
+    char message[100] = { 0 }; 
+ 
+    /* Warning - this is dangerous because we don't tell  
+   * the kernel how far it's allowed to write, so it  
+   * might overflow the buffer. In a real production  
+   * program, we would have used two ioctls - one to tell 
+   * the kernel the buffer length and another to give  
+   * it the buffer to fill 
+   */ 
+    ret_val = ioctl(file_desc, IOCTL_GET_MSG, message); 
+ 
+    if (ret_val < 0) { 
+        printf("ioctl_get_msg failed:%d\n", ret_val); 
+    } 
+    printf("get_msg message:%s", message); 
+ 
+    return ret_val; 
+} 
+ 
+int ioctl_get_nth_byte(int file_desc) 
+{ 
+    int i, c; 
+ 
+    printf("get_nth_byte message:"); 
+ 
+    i = 0; 
+    do { 
+        c = ioctl(file_desc, IOCTL_GET_NTH_BYTE, i++); 
+ 
+        if (c < 0) { 
+            printf("\nioctl_get_nth_byte failed at the %d'th byte:\n", i); 
+            return c; 
+        } 
+ 
+        putchar(c); 
+    } while (c != 0); 
+ 
+    return 0; 
+} 
+ 
+/* Main - Call the ioctl functions */ 
+int main(void) 
+{ 
+    int file_desc, ret_val; 
+    char *msg = "Message passed by ioctl\n"; 
+ 
+    file_desc = open(DEVICE_PATH, O_RDWR); 
+    if (file_desc < 0) { 
+        printf("Can't open device file: %s, error:%d\n", DEVICE_PATH, 
+               file_desc); 
+        exit(EXIT_FAILURE); 
+    } 
+ 
+    ret_val = ioctl_set_msg(file_desc, msg); 
+    if (ret_val) 
+        goto error; 
+    ret_val = ioctl_get_nth_byte(file_desc); 
+    if (ret_val) 
+        goto error; 
+    ret_val = ioctl_get_msg(file_desc); 
+    if (ret_val) 
+        goto error; 
+ 
+    close(file_desc); 
+    return 0; 
+error: 
+    close(file_desc); 
+    exit(EXIT_FAILURE); 
 }
