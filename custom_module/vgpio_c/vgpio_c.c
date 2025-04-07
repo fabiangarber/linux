@@ -1,173 +1,215 @@
+#include <linux/atomic.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/fs.h>
+#include <linux/printk.h>
+#include <linux/types.h>
 #include <linux/uaccess.h>
-#include <linux/cdev.h>
-#include <linux/spinlock.h>
-#include <linux/wait.h>
+#include <linux/version.h>
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Fabian T Garber");
-MODULE_DESCRIPTION("Virtual GPIO Driver with Blocking Read and Debug Mode");
-MODULE_VERSION("0.7");
+#define DEVICE_NAME "char_dev"
+#define DEVICE_FILE_NAME "char_dev"
+#define MAJOR_NUM 235
+#define BUF_LEN 80
 
-#define DEVICE_NAME "vgpio_c"
-#define GPIO_MAGIC 'g'
-#define NUM_GPIO_PINS 8  // Number of virtual GPIOs
+/* Ioctl command definitions */
+#define IOCTL_SET_MSG _IOW(MAJOR_NUM, 0, char *)
+#define IOCTL_GET_MSG _IOR(MAJOR_NUM, 1, char *)
+#define IOCTL_GET_NTH_BYTE _IO(MAJOR_NUM, 2)
 
-// Debug flag (default: 0)
-static int debug = 0;
-module_param(debug, int, 0644);
-MODULE_PARM_DESC(debug, "Enable debug output (default: 0)");
+static char message[BUF_LEN + 1];
+static struct class *cls;
+static atomic_t already_open = ATOMIC_INIT(0);
 
-struct gpio_data {
-    int pin;
-    int value;
-};
-
-#define GPIO_SET_VALUE _IOW(GPIO_MAGIC, 1, struct gpio_data)
-#define GPIO_GET_VALUE _IOR(GPIO_MAGIC, 2, struct gpio_data)
-
-static struct class *vgpio_class = NULL;
-static struct device *vgpio_device = NULL;
-static dev_t dev;
-static struct cdev cdev;
-static spinlock_t gpio_lock;
-static wait_queue_head_t gpio_wait_queue;
-static bool gpio_values[NUM_GPIO_PINS] = {0};
-static bool gpio_changed = false;
-
-// Device Open
+/* This function is called whenever a process attempts to open the device file */
 static int device_open(struct inode *inode, struct file *file)
 {
-    dev_info(vgpio_device, "Virtual GPIO device opened\n");
+    pr_info("device_open(%p)\n", file);
+
+    /* Increment the module's reference count */
+    try_module_get(THIS_MODULE);
+
     return 0;
 }
 
-// Device Close
+/* This function is called whenever a process closes the device file */
 static int device_release(struct inode *inode, struct file *file)
 {
-    dev_info(vgpio_device, "Virtual GPIO device closed\n");
+    pr_info("device_release(%p,%p)\n", inode, file);
+
+    /* Decrement the module's reference count */
+    module_put(THIS_MODULE);
+
     return 0;
 }
 
-// Device IOCTL
-static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+/* This function is called whenever a process tries to read from our device file */
+static ssize_t device_read(struct file *file, char __user *buffer,
+                           size_t length, loff_t *offset)
 {
-    struct gpio_data data;
+    int bytes_read = 0;
+    int max_bytes = BUF_LEN - *offset;
 
-    switch (cmd) {
-        case GPIO_SET_VALUE:
-            if (copy_from_user(&data, (struct gpio_data __user *)arg, sizeof(data)))
-                return -EFAULT;
-            if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
-                return -EINVAL;
-
-            spin_lock(&gpio_lock);
-            gpio_values[data.pin] = (bool)data.value;
-            gpio_changed = true;
-            spin_unlock(&gpio_lock);
-            wake_up_interruptible(&gpio_wait_queue);
-
-            if (debug) // Only print if debug mode is enabled
-                dev_info(vgpio_device, "GPIO[%d] set to %d\n", data.pin, data.value);
-            break;
-
-        case GPIO_GET_VALUE:
-            if (copy_from_user(&data, (struct gpio_data __user *)arg, sizeof(data)))
-                return -EFAULT;
-            if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
-                return -EINVAL;
-
-            spin_lock(&gpio_lock);
-            data.value = gpio_values[data.pin];
-            spin_unlock(&gpio_lock);
-
-            if (copy_to_user((struct gpio_data __user *)arg, &data, sizeof(data)))
-                return -EFAULT;
-            break;
-
-        default:
-            return -EINVAL;
+    /* Ensure we don't read past the end of the message */
+    if (*offset >= BUF_LEN || message[*offset] == '\0') {
+        return 0; /* End of file */
     }
+
+    /* Copy data from kernel space to user space */
+    while (length && bytes_read < max_bytes && message[*offset + bytes_read] != '\0') {
+        if (put_user(message[*offset + bytes_read], buffer + bytes_read)) {
+            return -EFAULT;
+        }
+        length--;
+        bytes_read++;
+    }
+
+    pr_info("Sent %d characters to the user\n", bytes_read);
+
+    /* Update the offset */
+    *offset += bytes_read;
+
+    /* Return the number of bytes successfully read */
+    return bytes_read;
+}
+
+/* This function is called whenever a process tries to write to our device file */
+static ssize_t device_write(struct file *file, const char __user *buffer,
+                            size_t length, loff_t *offset)
+{
+    int i;
+
+    pr_info("device_write(%p,%p,%ld)\n", file, buffer, length);
+
+    /* Copy data from user space to kernel space */
+    for (i = 0; i < length && i < BUF_LEN; i++) {
+        if (get_user(message[i], buffer + i)) {
+            return -EFAULT;
+        }
+    }
+
+    message[i] = '\0'; /* Null-terminate the message */
+    pr_info("Received %d characters from the user\n", i);
+
+    return i; /* Return the number of bytes successfully written */
+}
+
+/* This function is called whenever a process tries to do an ioctl on our device file */
+static long device_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
+{
+    int i;
+    char *temp;
+    char ch;
+
+    /* Don't allow concurrent access */
+    if (!atomic_cmpxchg(&already_open, 0, 1)) {
+        pr_info("Device already open, cannot perform ioctl\n");
+        return -EBUSY;
+    }
+
+    switch (ioctl_num) {
+    case IOCTL_SET_MSG:
+        /* Receive a pointer to a message (in user space) and set that to be the device's message */
+        temp = (char *)ioctl_param;
+        i = 0;
+
+        /* Copy data from user space to kernel space */
+        do {
+            if (get_user(ch, temp + i)) {
+                atomic_set(&already_open, 0);
+                return -EFAULT;
+            }
+            message[i] = ch;
+            i++;
+        } while (ch && i < BUF_LEN);
+
+        message[i - 1] = '\0'; /* Null-terminate the message */
+        pr_info("Received message via ioctl: %s\n", message);
+        break;
+
+    case IOCTL_GET_MSG:
+        /* Give the current message to the calling process */
+        temp = (char *)ioctl_param;
+        i = 0;
+
+        /* Copy data from kernel space to user space */
+        do {
+            ch = message[i];
+            if (put_user(ch, temp + i)) {
+                atomic_set(&already_open, 0);
+                return -EFAULT;
+            }
+            i++;
+        } while (ch && i < BUF_LEN);
+
+        if (put_user('\0', temp + i)) {
+            atomic_set(&already_open, 0);
+            return -EFAULT;
+        }
+        break;
+
+    case IOCTL_GET_NTH_BYTE:
+        /* Return the nth byte of the message */
+        return message[ioctl_param];
+
+    default:
+        return -ENOTTY;
+    }
+
+    atomic_set(&already_open, 0);
     return 0;
 }
 
-// Blocking Read for Waiting User-space
-static ssize_t device_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
-{
-    if (wait_event_interruptible(gpio_wait_queue, gpio_changed))
-        return -ERESTARTSYS; // If interrupted
-
-    gpio_changed = false;
-    char data = '1';
-    if (copy_to_user(buf, &data, 1))
-        return -EFAULT;
-
-    return 1;
-}
-
-// File Operations
+/* This structure will hold the functions to be called when a process does
+ * something to the device we created.
+ */
 static struct file_operations fops = {
-    .owner = THIS_MODULE,
     .open = device_open,
     .release = device_release,
+    .read = device_read,
+    .write = device_write,
     .unlocked_ioctl = device_ioctl,
-    .read = device_read,  // Read blocks until a virtual event
 };
 
-// Module Init
-static int __init virtual_gpio_init(void)
+/* Initialize the module - Register the character device */
+static int __init chardev2_init(void)
 {
-    int ret;
+    /* Register the character device */
+    int ret_val = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
 
-    spin_lock_init(&gpio_lock);
-    init_waitqueue_head(&gpio_wait_queue);
-
-    dev = MKDEV(0, 0);
-    ret = alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME);
-    if (ret < 0) {
-        dev_alert(vgpio_device, "Failed to allocate char device\n");
-        return ret;
+    /* Negative values signify an error */
+    if (ret_val < 0) {
+        pr_alert("%s failed with %d\n",
+                 "Sorry, registering the character device ", ret_val);
+        return ret_val;
     }
 
-    cdev_init(&cdev, &fops);
-    cdev.owner = THIS_MODULE;
-    ret = cdev_add(&cdev, dev, 1);
-    if (ret < 0) {
-        unregister_chrdev_region(dev, 1);
-        return ret;
-    }
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    cls = class_create(DEVICE_FILE_NAME);
+#else
+    cls = class_create(THIS_MODULE, DEVICE_FILE_NAME);
+#endif
+    device_create(cls, NULL, MKDEV(MAJOR_NUM, 0), NULL, DEVICE_FILE_NAME);
 
-    vgpio_class = class_create(DEVICE_NAME);
-    if (IS_ERR(vgpio_class)) {
-        cdev_del(&cdev);
-        unregister_chrdev_region(dev, 1);
-        return PTR_ERR(vgpio_class);
-    }
+    pr_info("Device created on /dev/%s\n", DEVICE_FILE_NAME);
 
-    vgpio_device = device_create(vgpio_class, NULL, dev, NULL, DEVICE_NAME);
-    if (IS_ERR(vgpio_device)) {
-        class_destroy(vgpio_class);
-        cdev_del(&cdev);
-        unregister_chrdev_region(dev, 1);
-        return PTR_ERR(vgpio_device);
-    }
-
-    dev_info(vgpio_device, "Virtual GPIO driver loaded\n");
     return 0;
 }
 
-// Module Exit
-static void __exit virtual_gpio_exit(void)
+/* Cleanup - unregister the appropriate file from /proc */
+static void __exit chardev2_exit(void)
 {
-    device_destroy(vgpio_class, dev);
-    class_destroy(vgpio_class);
-    cdev_del(&cdev);
-    unregister_chrdev_region(dev, 1);
-    dev_info(vgpio_device, "Virtual GPIO driver unloaded\n");
+    device_destroy(cls, MKDEV(MAJOR_NUM, 0));
+    class_destroy(cls);
+
+    /* Unregister the device */
+    unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
 }
 
-module_init(virtual_gpio_init);
-module_exit(virtual_gpio_exit);
+module_init(chardev2_init);
+module_exit(chardev2_exit);
+
+MODULE_LICENSE("GPL");
+
