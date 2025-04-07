@@ -9,9 +9,10 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
+#include "chardev.h"
+
 #define DEVICE_NAME "char_dev"
 #define DEVICE_FILE_NAME "char_dev"
-#define MAJOR_NUM 235
 #define BUF_LEN 80
 
 /* Ioctl command definitions */
@@ -102,27 +103,31 @@ static long device_ioctl(struct file *file, unsigned int ioctl_num, unsigned lon
     int i;
     char *temp;
     char ch;
-
-    /* Don't allow concurrent access */
+/*
     if (!atomic_cmpxchg(&already_open, 0, 1)) {
         pr_info("Device already open, cannot perform ioctl\n");
         return -EBUSY;
     }
-
+*/
     switch (ioctl_num) {
     case IOCTL_SET_MSG:
         /* Receive a pointer to a message (in user space) and set that to be the device's message */
+        pr_info("Set message start\n");
         temp = (char *)ioctl_param;
         i = 0;
 
         /* Copy data from user space to kernel space */
         do {
+        pr_info("Start copying data\n");
             if (get_user(ch, temp + i)) {
                 atomic_set(&already_open, 0);
+        pr_info("After atomic_set\n");
                 return -EFAULT;
             }
+        pr_info("Before message\n");
             message[i] = ch;
             i++;
+        pr_info("Iterator: %d\n",i);
         } while (ch && i < BUF_LEN);
 
         message[i - 1] = '\0'; /* Null-terminate the message */
