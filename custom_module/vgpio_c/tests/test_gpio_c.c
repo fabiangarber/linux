@@ -1,3 +1,4 @@
+#include "../vgpio_c.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,17 +9,6 @@
 #include <time.h>
 #include <ctype.h>
 
-#define GPIO_MAGIC 'g'
-
-struct gpio_data {
-    int pin;
-    int value;
-};
-
-#define GPIO_SET_VALUE 0x40086701
-#define GPIO_GET_VALUE 0x80086702
-
-#define DEVICE_FILE "/dev/vgpio_c"
 volatile int gpio_change_count = 0;
 int max_changes = 7;
 int debugMode = 0;
@@ -68,7 +58,7 @@ void run_test(int current_rep, int total_reps)
     // Reset the change count for each test run
     gpio_change_count = 0;
 
-    fd = open(DEVICE_FILE, O_RDWR);
+    fd = open(DEVICE_PATH, O_RDWR);
     if (fd < 0) {
         perror("Error opening device file");
         return;

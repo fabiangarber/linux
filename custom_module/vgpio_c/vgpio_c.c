@@ -4,35 +4,32 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
+#include <linux/device.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
+#include <linux/version.h>
+#include <linux/types.h>
+#include <linux/printk.h>
+
+#include "vgpio_c.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Fabian T Garber");
 MODULE_DESCRIPTION("Virtual GPIO Driver with Blocking Read and Debug Mode");
 MODULE_VERSION("0.7");
 
-#define DEVICE_NAME "vgpio_c"
-#define GPIO_MAGIC 'g'
 #define NUM_GPIO_PINS 8  // Number of virtual GPIOs
+
+#define GPIO_SET_VALUE _IOW(MAJOR_NUM, 0, struct gpio_data)
+#define GPIO_GET_VALUE _IOR(MAJOR_NUM, 1, struct gpio_data)
 
 // Debug flag (default: 0)
 static int debug = 0;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Enable debug output (default: 0)");
 
-struct gpio_data {
-    int pin;
-    int value;
-};
-
-#define GPIO_SET_VALUE _IOW(GPIO_MAGIC, 1, struct gpio_data)
-#define GPIO_GET_VALUE _IOR(GPIO_MAGIC, 2, struct gpio_data)
-
 static struct class *vgpio_class = NULL;
-static struct device *vgpio_device = NULL;
-static dev_t dev;
-static struct cdev cdev;
+//static struct device *vgpio_device = NULL;
 static spinlock_t gpio_lock;
 static wait_queue_head_t gpio_wait_queue;
 static bool gpio_values[NUM_GPIO_PINS] = {0};
@@ -41,14 +38,16 @@ static bool gpio_changed = false;
 // Device Open
 static int device_open(struct inode *inode, struct file *file)
 {
-    dev_info(vgpio_device, "Virtual GPIO device opened\n");
+    pr_info("Virtual GPIO device opened\n");
+    try_module_get(THIS_MODULE);
     return 0;
 }
 
 // Device Close
 static int device_release(struct inode *inode, struct file *file)
 {
-    dev_info(vgpio_device, "Virtual GPIO device closed\n");
+    pr_info("Virtual GPIO device closed\n");
+    module_put(THIS_MODULE);
     return 0;
 }
 
@@ -71,7 +70,7 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             wake_up_interruptible(&gpio_wait_queue);
 
             if (debug) // Only print if debug mode is enabled
-                dev_info(vgpio_device, "GPIO[%d] set to %d\n", data.pin, data.value);
+                pr_info("GPIO[%d] set to %d\n", data.pin, data.value);
             break;
 
         case GPIO_GET_VALUE:
@@ -120,53 +119,35 @@ static struct file_operations fops = {
 // Module Init
 static int __init virtual_gpio_init(void)
 {
-    int ret;
+    int ret = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
 
     spin_lock_init(&gpio_lock);
     init_waitqueue_head(&gpio_wait_queue);
 
-    dev = MKDEV(0, 0);
-    ret = alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME);
-    if (ret < 0) {
-        dev_alert(vgpio_device, "Failed to allocate char device\n");
-        return ret;
-    }
+    /* Register the character device */
 
-    cdev_init(&cdev, &fops);
-    cdev.owner = THIS_MODULE;
-    ret = cdev_add(&cdev, dev, 1);
+    /* Negative values signify an error */
     if (ret < 0) {
-        unregister_chrdev_region(dev, 1);
+        pr_alert("%s failed with %d\n",
+                 "Sorry, registering the character device ", ret);
         return ret;
     }
 
     vgpio_class = class_create(DEVICE_NAME);
-    if (IS_ERR(vgpio_class)) {
-        cdev_del(&cdev);
-        unregister_chrdev_region(dev, 1);
-        return PTR_ERR(vgpio_class);
-    }
 
-    vgpio_device = device_create(vgpio_class, NULL, dev, NULL, DEVICE_NAME);
-    if (IS_ERR(vgpio_device)) {
-        class_destroy(vgpio_class);
-        cdev_del(&cdev);
-        unregister_chrdev_region(dev, 1);
-        return PTR_ERR(vgpio_device);
-    }
+    device_create(vgpio_class, NULL, MKDEV(MAJOR_NUM, 0), NULL, DEVICE_NAME);
 
-    dev_info(vgpio_device, "Virtual GPIO driver loaded\n");
+    pr_info("Virtual GPIO driver loaded\n");
     return 0;
 }
 
 // Module Exit
 static void __exit virtual_gpio_exit(void)
 {
-    device_destroy(vgpio_class, dev);
+    device_destroy(vgpio_class, MKDEV(MAJOR_NUM, 0));
     class_destroy(vgpio_class);
-    cdev_del(&cdev);
-    unregister_chrdev_region(dev, 1);
-    dev_info(vgpio_device, "Virtual GPIO driver unloaded\n");
+    unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
+    pr_info("Virtual GPIO driver unloaded\n");
 }
 
 module_init(virtual_gpio_init);
