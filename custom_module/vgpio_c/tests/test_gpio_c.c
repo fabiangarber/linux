@@ -17,8 +17,7 @@ struct timespec start_hr, end_hr;
 time_t start_time_print, end_time_print;
 
 // Wait for Virtual Event in a separate thread
-void *irq_wait_thread(void *arg)
-{
+void *irq_wait_thread(void *arg) {
     char buf;
     while (gpio_change_count < max_changes) {
         if (read(fd, &buf, 1) < 0) {
@@ -33,13 +32,12 @@ void *irq_wait_thread(void *arg)
 }
 
 // Simulate GPIO changes
-void *sim_thread(void *arg)
-{
+void *sim_thread(void *arg) {
     struct gpio_data data;
     srand(time(NULL));
 
     while (gpio_change_count < max_changes) {
-        //usleep(1000);
+        // usleep(1000);
         data.pin = rand() % 8;
         data.value = rand() % 2;
         if (ioctl(fd, GPIO_SET_VALUE, &data) < 0) {
@@ -51,8 +49,7 @@ void *sim_thread(void *arg)
     return NULL;
 }
 
-void run_test(int current_rep, int total_reps)
-{
+void run_test(int current_rep, int total_reps) {
     pthread_t thread_irq, thread_sim;
 
     // Reset the change count for each test run
@@ -72,6 +69,7 @@ void run_test(int current_rep, int total_reps)
     // Store start time for printing
     time(&start_time_print);
     printf("Start time: %s", ctime(&start_time_print));
+    printf("Start Unix time: %ld\n", start_time_print);
 
     // Start high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &start_hr);
@@ -88,6 +86,7 @@ void run_test(int current_rep, int total_reps)
     // Store end time for printing
     time(&end_time_print);
     printf("End time: %s", ctime(&end_time_print));
+    printf("End Unix time: %ld\n", end_time_print);
 
     // Stop high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &end_hr);
@@ -100,8 +99,7 @@ void run_test(int current_rep, int total_reps)
     close(fd);
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     int repetitions = 1;
 
     // Parse command-line arguments.
@@ -127,10 +125,10 @@ int main(int argc, char *argv[])
         if (i < repetitions - 1) {
             printf("Pausing for 30 seconds before next run...\n");
             printf("\n");
-            printf("\n");
             sleep(30);
         }
     }
 
     return 0;
 }
+
