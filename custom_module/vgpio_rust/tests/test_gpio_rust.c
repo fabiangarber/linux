@@ -79,9 +79,9 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < num_runs; i++) {
         run_test(i + 1, num_runs, fd, num_toggles);
         if (i < num_runs - 1) {
-            printf("Pausing for 23 seconds before next run...\n");
+            printf("Pausing for 30 seconds before next run...\n");
             printf("\n");
-            sleep(23);
+            sleep(30);
         }
     }
 
