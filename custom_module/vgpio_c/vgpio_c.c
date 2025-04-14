@@ -3,126 +3,152 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
-#include <linux/delay.h> // Add this for msleep
 #include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/spinlock.h>
+#include <linux/wait.h>
+#include <linux/version.h>
+#include <linux/types.h>
+#include <linux/printk.h>
+
+#include "vgpio_c.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Fabian T Garber");
-MODULE_DESCRIPTION("Simple Virtual GPIO Driver");
-MODULE_VERSION("0.1");
+MODULE_DESCRIPTION("Virtual GPIO Driver with Blocking Read and Debug Mode");
+MODULE_VERSION("0.7");
 
-#define DEVICE_NAME "virtual_gpio"
+#define NUM_GPIO_PINS 8  // Number of virtual GPIOs
 
-// IOCTL commands
-#define GPIO_MAGIC 'g'
-#define GPIO_SET_VALUE _IOW(GPIO_MAGIC, 1, int)
-#define GPIO_GET_VALUE _IOR(GPIO_MAGIC, 2, int)
+#define GPIO_SET_VALUE _IOW(MAJOR_NUM, 0, struct gpio_data)
+#define GPIO_GET_VALUE _IOR(MAJOR_NUM, 1, struct gpio_data)
 
-static int major_number;
+// Debug flag (default: 0)
+static int debug = 0;
+module_param(debug, int, 0644);
+MODULE_PARM_DESC(debug, "Enable debug output (default: 0)");
+
 static struct class *vgpio_class = NULL;
-static struct device *vgpio_device = NULL;
-static dev_t dev;
-static struct cdev cdev;
+//static struct device *vgpio_device = NULL;
+static spinlock_t gpio_lock;
+static wait_queue_head_t gpio_wait_queue;
+static bool gpio_values[NUM_GPIO_PINS] = {0};
+static bool gpio_changed = false;
 
-// Virtual GPIO pin state
-static bool gpio_value = 0;
-
-static int device_open(struct inode *inode, struct file *file) {
-  printk(KERN_INFO pr_fmt("Device opened\n"));
-  return 0;
+// Device Open
+static int device_open(struct inode *inode, struct file *file)
+{
+    pr_info("Virtual GPIO device opened\n");
+    try_module_get(THIS_MODULE);
+    return 0;
 }
 
-static int device_release(struct inode *inode, struct file *file) {
-  printk(KERN_INFO pr_fmt("Device closed\n"));
-  return 0;
+// Device Close
+static int device_release(struct inode *inode, struct file *file)
+{
+    pr_info("Virtual GPIO device closed\n");
+    module_put(THIS_MODULE);
+    return 0;
 }
 
-static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
-  int ret = 0;
-  bool value;
+// Device IOCTL
+static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct gpio_data data;
 
-  switch (cmd) {
-  case GPIO_SET_VALUE:
-    ret = get_user(value, (bool __user *)arg);
-    if (ret == 0) {
-      gpio_value = value;
-      printk(KERN_INFO pr_fmt("GPIO value set to %d\n"), gpio_value);
+    switch (cmd) {
+        case GPIO_SET_VALUE:
+            if (copy_from_user(&data, (struct gpio_data __user *)arg, sizeof(data)))
+                return -EFAULT;
+            if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
+                return -EINVAL;
+
+            spin_lock(&gpio_lock);
+            gpio_values[data.pin] = (bool)data.value;
+            gpio_changed = true;
+            spin_unlock(&gpio_lock);
+            wake_up_interruptible(&gpio_wait_queue);
+
+            if (debug) // Only print if debug mode is enabled
+                pr_info("GPIO[%d] set to %d\n", data.pin, data.value);
+            break;
+
+        case GPIO_GET_VALUE:
+            if (copy_from_user(&data, (struct gpio_data __user *)arg, sizeof(data)))
+                return -EFAULT;
+            if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
+                return -EINVAL;
+
+            spin_lock(&gpio_lock);
+            data.value = gpio_values[data.pin];
+            spin_unlock(&gpio_lock);
+
+            if (copy_to_user((struct gpio_data __user *)arg, &data, sizeof(data)))
+                return -EFAULT;
+            break;
+
+        default:
+            return -EINVAL;
     }
-    break;
-  case GPIO_GET_VALUE:
-    ret = put_user(gpio_value, (bool __user *)arg);
-    break;
-  default:
-    ret = -EINVAL;
-  }
-  return ret;
+    return 0;
 }
 
+// Blocking Read for Waiting User-space
+static ssize_t device_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
+{
+    if (wait_event_interruptible(gpio_wait_queue, gpio_changed))
+        return -ERESTARTSYS; // If interrupted
+
+    gpio_changed = false;
+    char data = '1';
+    if (copy_to_user(buf, &data, 1))
+        return -EFAULT;
+
+    return 1;
+}
+
+// File Operations
 static struct file_operations fops = {
-  .owner = THIS_MODULE,
-  .open = device_open,
-  .release = device_release,
-  .unlocked_ioctl = device_ioctl,
+    .owner = THIS_MODULE,
+    .open = device_open,
+    .release = device_release,
+    .unlocked_ioctl = device_ioctl,
+    .read = device_read,  // Read blocks until a virtual event
 };
 
-static int __init virtual_gpio_init(void) {
-  int ret;
+// Module Init
+static int __init virtual_gpio_init(void)
+{
+    int ret = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
 
-  // Allocate major number dynamically
-  printk(KERN_INFO pr_fmt("Allocate major number\n"));
-  ret = alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME);
-  if (ret < 0) {
-    printk(KERN_ERR pr_fmt("Failed to allocate major number\n"));
-    return ret;
-  }
-  major_number = MAJOR(dev);
+    spin_lock_init(&gpio_lock);
+    init_waitqueue_head(&gpio_wait_queue);
 
-  // Initialize cdev structure
-  printk(KERN_INFO pr_fmt("cdev_init\n"));
-  cdev_init(&cdev, &fops);
-  printk(KERN_INFO pr_fmt("cdev_owner\n"));
-  cdev.owner = THIS_MODULE;
+    /* Register the character device */
 
-  // Add character device to the system
-  ret = cdev_add(&cdev, dev, 1);
-  if (ret < 0) {
-    printk(KERN_ERR pr_fmt("Failed to add cdev\n"));
-    unregister_chrdev_region(dev, 1);
-    return ret;
-  }
+    /* Negative values signify an error */
+    if (ret < 0) {
+        pr_alert("%s failed with %d\n",
+                 "Sorry, registering the character device ", ret);
+        return ret;
+    }
 
-  // Create device class
-  vgpio_class = class_create("vgpio");
-  if (IS_ERR(vgpio_class)) {
-    printk(KERN_ERR pr_fmt("Failed to create class\n"));
-    cdev_del(&cdev);
-    unregister_chrdev_region(dev, 1);
-    return PTR_ERR(vgpio_class);
-  }
+    vgpio_class = class_create(DEVICE_NAME);
 
-  // Create device
-  vgpio_device = device_create(vgpio_class, NULL, dev, NULL, DEVICE_NAME);
-  if (IS_ERR(vgpio_device)) {
-    printk(KERN_ERR pr_fmt("Failed to create device\n"));
-    class_destroy(vgpio_class);
-    cdev_del(&cdev);
-    unregister_chrdev_region(dev, 1);
-    return PTR_ERR(vgpio_device);
-  }
+    device_create(vgpio_class, NULL, MKDEV(MAJOR_NUM, 0), NULL, DEVICE_NAME);
 
-  printk(KERN_INFO pr_fmt("Driver loaded\n"));
-  return 0;
+    pr_info("Virtual GPIO driver loaded\n");
+    return 0;
 }
 
-static void __exit virtual_gpio_exit(void) {
-  printk(KERN_INFO pr_fmt("Start cleanup\n"));
-  device_destroy(vgpio_class, dev);
-  class_destroy(vgpio_class);
-  cdev_del(&cdev);
-  unregister_chrdev_region(dev, 1);
-  printk(KERN_INFO pr_fmt("Driver unloaded\n"));
+// Module Exit
+static void __exit virtual_gpio_exit(void)
+{
+    device_destroy(vgpio_class, MKDEV(MAJOR_NUM, 0));
+    class_destroy(vgpio_class);
+    unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
+    pr_info("Virtual GPIO driver unloaded\n");
 }
 
 module_init(virtual_gpio_init);
 module_exit(virtual_gpio_exit);
-
