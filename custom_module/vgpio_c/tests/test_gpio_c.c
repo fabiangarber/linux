@@ -44,6 +44,7 @@ void *sim_thread(void *arg) {
             perror("Error setting GPIO value");
         } else if (debugMode) {
             printf("Simulated GPIO change: pin %d set to %d\n", data.pin, data.value);
+	    fflush(stdout);
         }
     }
     return NULL;
@@ -63,13 +64,17 @@ void run_test(int current_rep, int total_reps) {
 
     // Print the repetition count
     printf("This is a test for the C kernel module\n");
+    fflush(stdout);
     printf("Starting test %d out of %d\n", current_rep, total_reps);
+    fflush(stdout);
     printf("\n");
 
     // Store start time for printing
     time(&start_time_print);
     printf("Start time: %s", ctime(&start_time_print));
+    fflush(stdout);
     printf("Start Unix time: %ld\n", start_time_print);
+    fflush(stdout);
 
     // Start high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &start_hr);
@@ -86,7 +91,9 @@ void run_test(int current_rep, int total_reps) {
     // Store end time for printing
     time(&end_time_print);
     printf("End time: %s", ctime(&end_time_print));
+    fflush(stdout);
     printf("End Unix time: %ld\n", end_time_print);
+    fflush(stdout);
 
     // Stop high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &end_hr);
@@ -94,7 +101,9 @@ void run_test(int current_rep, int total_reps) {
                      (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
 
     printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
+    fflush(stdout);
     printf("Total elapsed time: %.9f seconds.\n", elapsed);
+    fflush(stdout);
 
     close(fd);
 }
@@ -125,6 +134,7 @@ int main(int argc, char *argv[]) {
         if (i < repetitions - 1) {
             printf("Pausing for 30 seconds before next run...\n");
             printf("\n");
+	    fflush(stdout);
             sleep(30);
         }
     }
