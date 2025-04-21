@@ -6,7 +6,7 @@
  
 /* device specifics, such as ioctl numbers and the  
  * major device file. */ 
-#include "../test_module.h" 
+#include "../chardev.h" 
  
 #include <stdio.h> /* standard I/O */ 
 #include <fcntl.h> /* open */ 
