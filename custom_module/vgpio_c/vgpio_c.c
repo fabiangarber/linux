@@ -63,10 +63,10 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
                 return -EINVAL;
 
-            spin_lock(&gpio_lock);
+            //spin_lock(&gpio_lock);
             gpio_values[data.pin] = (bool)data.value;
             gpio_changed = true;
-            spin_unlock(&gpio_lock);
+            //spin_unlock(&gpio_lock);
             wake_up_interruptible(&gpio_wait_queue);
 
             if (debug) // Only print if debug mode is enabled
@@ -79,9 +79,9 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
                 return -EINVAL;
 
-            spin_lock(&gpio_lock);
+            //spin_lock(&gpio_lock);
             data.value = gpio_values[data.pin];
-            spin_unlock(&gpio_lock);
+            //spin_unlock(&gpio_lock);
 
             if (copy_to_user((struct gpio_data __user *)arg, &data, sizeof(data)))
                 return -EFAULT;
