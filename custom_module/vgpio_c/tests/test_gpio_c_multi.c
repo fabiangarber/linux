@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <time.h>
 #include <ctype.h>
 
@@ -15,22 +16,43 @@ int fd;
 struct timespec start_hr, end_hr;
 time_t start_time_print, end_time_print;
 
-void simulate_gpio_changes() {
+// Wait for Virtual Event in a separate thread
+void *irq_wait_thread(void *arg) {
+    char buf;
+    while (gpio_change_count < max_changes) {
+        if (read(fd, &buf, 1) < 0) {
+            perror("Error waiting for event");
+            break;
+        }
+        gpio_change_count++;
+        if (debugMode)
+            printf("Virtual GPIO Event Triggered! Change #%d\n", gpio_change_count);
+    }
+    return NULL;
+}
+
+// Simulate GPIO changes
+void *sim_thread(void *arg) {
     struct gpio_data data;
     srand(time(NULL));
 
     while (gpio_change_count < max_changes) {
+        // usleep(1000);
         data.pin = rand() % 8;
         data.value = rand() % 2;
         if (ioctl(fd, GPIO_SET_VALUE, &data) < 0) {
             perror("Error setting GPIO value");
         } else if (debugMode) {
             printf("Simulated GPIO change: pin %d set to %d\n", data.pin, data.value);
+	    fflush(stdout);
         }
-     }
-
+    }
+    return NULL;
 }
+
 void run_test(int current_rep, int total_reps) {
+    pthread_t thread_irq, thread_sim;
+
     // Reset the change count for each test run
     gpio_change_count = 0;
 
@@ -42,26 +64,36 @@ void run_test(int current_rep, int total_reps) {
 
     // Print the repetition count
     printf("This is a test for the C kernel module\n");
+    fflush(stdout);
     printf("Starting test %d out of %d\n", current_rep, total_reps);
+    fflush(stdout);
     printf("\n");
 
     // Store start time for printing
     time(&start_time_print);
     printf("Start time: %s", ctime(&start_time_print));
+    fflush(stdout);
     printf("Start Unix time: %ld\n", start_time_print);
+    fflush(stdout);
 
     // Start high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &start_hr);
 
     if (debugMode)
-        printf("Starting GPIO simulation in DEBUG mode...\n");
+        printf("Starting GPIO IRQ wait and simulation threads in DEBUG mode...\n");
 
-    simulate_gpio_changes();
+    pthread_create(&thread_irq, NULL, irq_wait_thread, NULL);
+    pthread_create(&thread_sim, NULL, sim_thread, NULL);
+
+    pthread_join(thread_irq, NULL);
+    pthread_join(thread_sim, NULL);
 
     // Store end time for printing
     time(&end_time_print);
     printf("End time: %s", ctime(&end_time_print));
+    fflush(stdout);
     printf("End Unix time: %ld\n", end_time_print);
+    fflush(stdout);
 
     // Stop high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &end_hr);
@@ -69,7 +101,9 @@ void run_test(int current_rep, int total_reps) {
                      (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
 
     printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
+    fflush(stdout);
     printf("Total elapsed time: %.9f seconds.\n", elapsed);
+    fflush(stdout);
 
     close(fd);
 }
@@ -100,9 +134,11 @@ int main(int argc, char *argv[]) {
         if (i < repetitions - 1) {
             printf("Pausing for 30 seconds before next run...\n");
             printf("\n");
+	    fflush(stdout);
             sleep(30);
         }
     }
 
     return 0;
 }
+

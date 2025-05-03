@@ -5,6 +5,8 @@
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
+#include <linux/spinlock.h>
+#include <linux/wait.h>
 #include <linux/version.h>
 #include <linux/types.h>
 #include <linux/printk.h>
@@ -28,7 +30,10 @@ MODULE_PARM_DESC(debug, "Enable debug output (default: 0)");
 
 static struct class *vgpio_class = NULL;
 //static struct device *vgpio_device = NULL;
+static spinlock_t gpio_lock;
+static wait_queue_head_t gpio_wait_queue;
 static bool gpio_values[NUM_GPIO_PINS] = {0};
+static bool gpio_changed = false;
 
 // Device Open
 static int device_open(struct inode *inode, struct file *file)
@@ -58,7 +63,11 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
                 return -EINVAL;
 
+            //spin_lock(&gpio_lock);
             gpio_values[data.pin] = (bool)data.value;
+            gpio_changed = true;
+            //spin_unlock(&gpio_lock);
+            wake_up_interruptible(&gpio_wait_queue);
 
             if (debug) // Only print if debug mode is enabled
                 pr_info("GPIO[%d] set to %d\n", data.pin, data.value);
@@ -70,7 +79,9 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
                 return -EINVAL;
 
+            //spin_lock(&gpio_lock);
             data.value = gpio_values[data.pin];
+            //spin_unlock(&gpio_lock);
 
             if (copy_to_user((struct gpio_data __user *)arg, &data, sizeof(data)))
                 return -EFAULT;
@@ -85,7 +96,10 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 // Blocking Read for Waiting User-space
 static ssize_t device_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
 {
+    if (wait_event_interruptible(gpio_wait_queue, gpio_changed))
+        return -ERESTARTSYS; // If interrupted
 
+    gpio_changed = false;
     char data = '1';
     if (copy_to_user(buf, &data, 1))
         return -EFAULT;
@@ -106,6 +120,9 @@ static struct file_operations fops = {
 static int __init virtual_gpio_init(void)
 {
     int ret = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
+
+    spin_lock_init(&gpio_lock);
+    init_waitqueue_head(&gpio_wait_queue);
 
     /* Register the character device */
 
@@ -135,4 +152,3 @@ static void __exit virtual_gpio_exit(void)
 
 module_init(virtual_gpio_init);
 module_exit(virtual_gpio_exit);
-
