@@ -1,4 +1,4 @@
-#include "../vgpio_c.h"
+#include "vgpio_c.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +7,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <ctype.h>
-
-//#define GPIO_SET_VALUE 0x40086703
-//#define GPIO_GET_VALUE 0x80086704
 
 volatile int gpio_change_count = 0;
 int max_changes = 7;
@@ -45,7 +42,7 @@ void run_test(int current_rep, int total_reps) {
     }
 
     // Print the repetition count
-    printf("This is a test for the C kernel module\n");
+    printf("This is a test for the Rust kernel module (no sl, no wq)\n");
     printf("Starting test %d out of %d\n", current_rep, total_reps);
     printf("\n");
 
@@ -57,8 +54,9 @@ void run_test(int current_rep, int total_reps) {
     // Start high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &start_hr);
 
-    if (debugMode)
+    if (debugMode){
         printf("Starting GPIO simulation in DEBUG mode...\n");
+    }
 
     simulate_gpio_changes();
 

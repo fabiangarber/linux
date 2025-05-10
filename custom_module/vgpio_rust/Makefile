@@ -4,8 +4,8 @@ RUSTFLAGS := -C target-feature=+neon -C target-cpu=cortex-a72
 
 export RUSTFLAGS
 
-rust_sample-y := src/vgpio_rust.rs
-obj-m += vgpio_rust.o
+rust_sample-y := src/vgpio_rust_wq.rs
+obj-m += vgpio_rust_wq.o
 
 # Ensure Clang is used for compilation
 CC := clang

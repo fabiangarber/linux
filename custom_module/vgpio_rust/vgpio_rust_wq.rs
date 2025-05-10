@@ -11,6 +11,8 @@ use kernel::c_str;
 use kernel::error::code;
 use core::ffi::{c_int, c_long};
 use core::marker::PhantomData;
+use kernel::sync::{SpinLock, new_spinlock, LockClassKey};
+use kernel::pin_init;
 
 module! {
     type: VgpioRust,
@@ -38,9 +40,34 @@ struct GpioData {
     value: c_int,
 }
 
-/// Global virtual GPIO pin states (8 pins supported).
-/// A value of 0 means low; 1 means high.
-static mut VGPIO_PINS: [c_int; 8] = [0; 8];
+/// Inner structure for GPIO pins.
+struct VgpioInner {
+    pins: [c_int; 8],
+}
+
+/// Structure containing the spinlock.
+#[pin_data]
+struct VgpioData {
+    c: u32,
+    #[pin]
+    vgpio: SpinLock<VgpioInner>,
+}
+
+/// Lock class key for the spinlock.
+static VGPIO_LOCK_CLASS: LockClassKey = LockClassKey::new();
+
+/// Initialize the spinlock.
+impl VgpioData {
+    fn new() -> impl PinInit<Self> {
+        pin_init!(Self {
+            c: 0,
+            vgpio <- new_spinlock!(VgpioInner { pins: [0; 8] }),
+        })
+    }
+}
+
+/// Initialize the spinlock.
+static VGPIO_DATA: VgpioData = Box::pin_init(VgpioData {c: 0, vgpio: Lock<VgpioInner {pins: 1}> }, GFP_KERNEL);
 
 /// A newtype wrapper around the C file_operations structure.
 #[repr(transparent)]
@@ -242,9 +269,11 @@ pub extern "C" fn vgpio_ioctl(
             if data.pin < 0 || data.pin >= 8 {
                 return -(bindings::EINVAL as c_long);
             }
-            unsafe {
-                VGPIO_PINS[data.pin as usize] = data.value;
-            }
+
+            // Acquire the spinlock before accessing the shared data.
+            let mut guard = VGPIO_DATA.vgpio.lock();
+            guard.pins[data.pin as usize] = data.value;
+            // The spinlock is automatically released when `guard` goes out of scope.
             pr_info!("vgpio_rust: virtual GPIO pin {} set to {}\n", data.pin, data.value);
         },
         GPIO_GET_VALUE => {
@@ -262,9 +291,12 @@ pub extern "C" fn vgpio_ioctl(
             if data.pin < 0 || data.pin >= 8 {
                 return -(bindings::EINVAL as c_long);
             }
-            unsafe {
-                data.value = VGPIO_PINS[data.pin as usize];
-            }
+
+            // Acquire the spinlock before accessing the shared data.
+            let guard = VGPIO_DATA.vgpio.lock();
+            data.value = guard.pins[data.pin as usize];
+            // The spinlock is automatically released when `guard` goes out of scope.
+
             let ret = unsafe {
                 bindings::copy_to_user(
                     arg as *mut core::ffi::c_void,

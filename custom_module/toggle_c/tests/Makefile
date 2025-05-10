@@ -1,8 +1,9 @@
 CC = aarch64-linux-gnu-gcc
-TARGET = test_rust_c_version
+TARGET = toggle_test
 
 all:
 	$(CC) -o $(TARGET) $(TARGET).c
 
 clean:
 	rm -f $(TARGET)
+

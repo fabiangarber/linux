@@ -18,8 +18,8 @@ MODULE_VERSION("0.7");
 
 #define NUM_GPIO_PINS 8  // Number of virtual GPIOs
 
-#define GPIO_SET_VALUE _IOW(MAJOR_NUM, 0, struct gpio_data)
-#define GPIO_GET_VALUE _IOR(MAJOR_NUM, 1, struct gpio_data)
+//#define GPIO_SET_VALUE _IOW(MAJOR_NUM, 0, struct gpio_data)
+//#define GPIO_GET_VALUE _IOR(MAJOR_NUM, 1, struct gpio_data)
 
 // Debug flag (default: 0)
 static int debug = 0;
@@ -58,11 +58,11 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (data.pin < 0 || data.pin >= NUM_GPIO_PINS)
                 return -EINVAL;
 
-            gpio_values[data.pin] = (bool)data.value;
+            gpio_values[data.pin] = data.value;
 
-            if (debug) // Only print if debug mode is enabled
+//            if (debug) // Only print if debug mode is enabled
                 pr_info("GPIO[%d] set to %d\n", data.pin, data.value);
-            break;
+ //           break;
 
         case GPIO_GET_VALUE:
             if (copy_from_user(&data, (struct gpio_data __user *)arg, sizeof(data)))

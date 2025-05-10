@@ -14,7 +14,7 @@
 /* The major device number. We can not rely on dynamic registration
  * any more, because ioctls need to know it.
  */
-#define MAJOR_NUM 158
+//#define MAJOR_NUM 158
 
 struct gpio_data {
 	int pin;
@@ -22,9 +22,8 @@ struct gpio_data {
 };
 
 /* Set the message of the device driver */
-//#define GPIO_SET_VALUE 0x40086703
-//#define GPIO_GET_VALUE 0x80086704
-#define GPIO_SET_VALUE _IOW(MAJOR_NUM, 0, struct gpio_data)
+#define GPIO_SET_VALUE 0x40086701
+#define GPIO_GET_VALUE 0x80086702
 /* _IOW means that we are creating an ioctl command number for passing
  * information from a user process to the kernel module.
  *
@@ -38,7 +37,6 @@ struct gpio_data {
  */
 
 /* Get the message of the device driver */
-#define GPIO_GET_VALUE _IOR(MAJOR_NUM, 1, struct gpio_data)
 /* This IOCTL is used for output, to get the message of the device driver.
  * However, we still need the buffer to place the message in to be input,
  * as it is allocated by the process.
@@ -50,7 +48,7 @@ struct gpio_data {
  */
 
 /* The name of the device file */
-#define DEVICE_NAME "vgpio_c"
-#define DEVICE_PATH "/dev/vgpio_c"
+#define DEVICE_NAME "vgpio_rust"
+#define DEVICE_PATH "/dev/vgpio_rust"
 
 #endif

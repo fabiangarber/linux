@@ -1,78 +1,69 @@
-#include "../vgpio_c.h"
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/ioctl.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <time.h>
+#include <stdbool.h>
+#include <string.h>
 #include <ctype.h>
+#include "../ioctl_toggle.h"
 
-//#define GPIO_SET_VALUE 0x40086703
-//#define GPIO_GET_VALUE 0x80086704
-
-volatile int gpio_change_count = 0;
-int max_changes = 7;
+volatile int toggle_change_count = 0;
+int max_toggles = 10;
 int debugMode = 0;
 int fd;
 struct timespec start_hr, end_hr;
 time_t start_time_print, end_time_print;
 
-void simulate_gpio_changes() {
-    struct gpio_data data;
+void simulate_toggle_changes() {
+    int value;
     srand(time(NULL));
 
-    while (gpio_change_count < max_changes) {
-        data.pin = rand() % 8;
-        data.value = rand() % 2;
-	gpio_change_count++;
-        if (ioctl(fd, GPIO_SET_VALUE, &data) < 0) {
-            perror("Error setting GPIO value");
+    while (toggle_change_count < max_toggles) {
+        value = rand() % 2;
+        toggle_change_count++;
+        if (ioctl(fd, IOCTL_TOGGLE_SET, &value) < 0) {
+            perror("Error setting toggle value");
         } else if (debugMode) {
-            printf("Simulated GPIO change: pin %d set to %d\n", data.pin, data.value);
+            printf("Simulated Toggle change: set to %d\n", value);
         }
-     }
-
+    }
 }
-void run_test(int current_rep, int total_reps) {
-    // Reset the change count for each test run
-    gpio_change_count = 0;
 
-    fd = open(DEVICE_PATH, O_RDWR);
+void run_test(int current_rep, int total_reps) {
+    toggle_change_count = 0;
+
+    fd = open("/dev/toggle", O_RDWR);
     if (fd < 0) {
         perror("Error opening device file");
         return;
     }
 
-    // Print the repetition count
     printf("This is a test for the C kernel module\n");
     printf("Starting test %d out of %d\n", current_rep, total_reps);
     printf("\n");
 
-    // Store start time for printing
     time(&start_time_print);
     printf("Start time: %s", ctime(&start_time_print));
     printf("Start Unix time: %ld\n", start_time_print);
 
-    // Start high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &start_hr);
 
     if (debugMode)
-        printf("Starting GPIO simulation in DEBUG mode...\n");
+        printf("Starting Toggle simulation in DEBUG mode...\n");
 
-    simulate_gpio_changes();
+    simulate_toggle_changes();
 
-    // Store end time for printing
     time(&end_time_print);
     printf("End time: %s", ctime(&end_time_print));
     printf("End Unix time: %ld\n", end_time_print);
 
-    // Stop high-resolution timer
     clock_gettime(CLOCK_MONOTONIC, &end_hr);
     double elapsed = (end_hr.tv_sec - start_hr.tv_sec) +
                      (end_hr.tv_nsec - start_hr.tv_nsec) / 1e9;
 
-    printf("Test completed after %d GPIO state changes.\n", gpio_change_count);
+    printf("Test completed after %d Toggle state changes.\n", toggle_change_count);
     printf("Total elapsed time: %.9f seconds.\n", elapsed);
 
     close(fd);
@@ -81,12 +72,11 @@ void run_test(int current_rep, int total_reps) {
 int main(int argc, char *argv[]) {
     int repetitions = 1;
 
-    // Parse command-line arguments.
     for (int i = 1; i < argc; i++) {
         if (isdigit(argv[i][0])) {
             int val = atoi(argv[i]);
             if (val > 0)
-                max_changes = val;
+                max_toggles = val;
         } else if ((strcmp(argv[i], "-d") == 0) || (strcmp(argv[i], "--debug") == 0)) {
             debugMode = 1;
         } else if ((strcmp(argv[i], "-r") == 0) || (strcmp(argv[i], "--repetitions") == 0)) {
@@ -110,3 +100,5 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
+
